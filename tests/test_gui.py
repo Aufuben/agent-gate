@@ -52,8 +52,8 @@ def test_perform_check_intern_prod_restart_denied(tmp_path: Path) -> None:
     assert result.decision == "deny"
     assert "intern" in result.reason
     text = format_verdict(result)
-    assert text.startswith("拒绝")
-    assert result.reason in text
+    assert text.startswith("不能")
+    assert "实习生不能重启生产" in text
 
 
 def test_perform_approve_same_person_twice_marks_duplicate(tmp_path: Path) -> None:
@@ -102,7 +102,7 @@ def test_perform_check_sre_prod_restart_after_two_approvers(tmp_path: Path) -> N
     after = perform_check(**kwargs)
     assert after.allowed is True
     assert after.decision == "allow"
-    assert format_verdict(after).startswith("允许")
+    assert format_verdict(after).startswith("能")
 
 
 def test_perform_record_writes_decision(tmp_path: Path) -> None:
@@ -142,16 +142,22 @@ def test_capture_demo_writes_expected_lines(tmp_path: Path) -> None:
     assert "demo done" in output
 
 
-def test_page_html_teaches_usage_without_gradient_or_emoji() -> None:
+def test_page_html_is_simple_without_gradient_or_emoji() -> None:
     from agent_gate.gui import page_html
 
     html = page_html()
-    assert "检查是否允许" in html
+    assert "能不能做" in html
+    assert "实习生" in html
+    assert "重启生产" in html
+    assert "高级" in html
     assert "浏览" in html
-    assert "写入审计记录" in html
+    assert "alice" in html
+    assert "bob" in html
     assert "gradient" not in html.lower()
     assert "emoji" not in html.lower()
     assert "\U0001f389" not in html
+    assert html.count("input") >= 2
+    assert "details" in html
 
 
 def test_dispatch_check_intern_prod_restart_denied(tmp_path: Path) -> None:
@@ -170,8 +176,11 @@ def test_dispatch_check_intern_prod_restart_denied(tmp_path: Path) -> None:
     )
     assert status == 200
     assert data["allowed"] is False
-    assert data["title"] == "拒绝"
-    assert "intern" in data["reason"]
+    assert data["title"] == "不能"
+    assert data["needs_dual"] is False
+    assert "实习生不能重启生产" in data["reason_human"]
+    assert data.get("recorded") is not None
+    assert data["recorded"]["decision"] == "deny"
 
 
 def test_dispatch_browse_uses_injected_picker() -> None:
@@ -207,7 +216,8 @@ def test_http_server_serves_page_and_check(tmp_path: Path) -> None:
         res = conn.getresponse()
         body = res.read().decode("utf-8")
         assert res.status == 200
-        assert "检查是否允许" in body
+        assert "能不能做" in body
+        assert "高级" in body
 
         payload = json.dumps(
             {
@@ -229,7 +239,7 @@ def test_http_server_serves_page_and_check(tmp_path: Path) -> None:
         data = json.loads(checked.read().decode("utf-8"))
         assert checked.status == 200
         assert data["allowed"] is False
-        assert data["title"] == "拒绝"
+        assert data["title"] == "不能"
     finally:
         try:
             conn.close()
@@ -237,3 +247,68 @@ def test_http_server_serves_page_and_check(tmp_path: Path) -> None:
             pass
         server.shutdown()
         thread.join(timeout=2)
+
+
+def test_human_reason_intern_cannot_restart() -> None:
+    from agent_gate.gui import human_reason, needs_dual, perform_check, verdict_title
+
+    result = perform_check(
+        policy_path=str(EXAMPLE_POLICY),
+        audit_path="unused.jsonl",
+        role="intern",
+        tool="prod_restart",
+        actor=None,
+        session="s",
+    )
+    assert verdict_title(result) == "不能"
+    assert needs_dual(result) is False
+    assert human_reason(result) == "实习生不能重启生产。"
+
+
+def test_dispatch_sre_restart_needs_two_people_without_recording(tmp_path: Path) -> None:
+    from agent_gate.audit import AuditLog
+    from agent_gate.gui import dispatch_api
+
+    audit = str(tmp_path / "audit.jsonl")
+    status, data = dispatch_api(
+        "/api/check",
+        {
+            "policy_path": str(EXAMPLE_POLICY),
+            "audit_path": audit,
+            "role": "sre",
+            "tool": "prod_restart",
+            "session": "sess-dual",
+        },
+    )
+    assert status == 200
+    assert data["title"] == "要两个人批"
+    assert data["needs_dual"] is True
+    assert "要两个人同意" in data["reason_human"]
+    assert data.get("recorded") is None
+    assert list(AuditLog(audit).iter_events()) == []
+
+
+def test_dispatch_two_consents_then_allowed_and_recorded(tmp_path: Path) -> None:
+    from agent_gate.gui import dispatch_api
+
+    audit = str(tmp_path / "audit.jsonl")
+    body = {
+        "policy_path": str(EXAMPLE_POLICY),
+        "audit_path": audit,
+        "role": "sre",
+        "tool": "prod_restart",
+        "session": "sess-ok",
+    }
+    dispatch_api("/api/check", body)
+    first = dispatch_api("/api/approve", {**body, "approver": "alice"})
+    assert first[0] == 200
+    assert first[1]["check"]["needs_dual"] is True
+    assert first[1]["check"].get("recorded") is None
+    second = dispatch_api("/api/approve", {**body, "approver": "bob"})
+    assert second[0] == 200
+    assert second[1]["check"]["allowed"] is True
+    assert second[1]["check"]["title"] == "能"
+    assert second[1]["check"]["needs_dual"] is False
+    assert second[1]["check"].get("recorded") is not None
+    assert "已经同意" in second[1]["check"]["reason_human"]
+

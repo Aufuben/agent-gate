@@ -13,13 +13,20 @@ from agent_gate.gate import CheckResult, Gate
 
 ROLES = ("intern", "engineer", "sre")
 TOOLS = ("read_file", "http_fetch", "shell", "prod_restart")
+ROLE_ZH = {"intern": "实习生", "engineer": "工程师", "sre": "SRE"}
+TOOL_ZH = {
+    "read_file": "读文件",
+    "http_fetch": "访问外网",
+    "shell": "执行命令",
+    "prod_restart": "重启生产",
+}
+ROLE_OPTIONS = tuple({"id": key, "label": ROLE_ZH[key]} for key in ROLES)
+TOOL_OPTIONS = tuple({"id": key, "label": TOOL_ZH[key]} for key in TOOLS)
 
 HOW_TO = (
-    "这是拦截 Agent 工具调用的门。\n"
-    "先检查，再执行；本页不真正重启生产。\n"
-    "写操作要两个不同的人批准。\n"
-    "同一人点两次批准不算两票。\n"
-    "策略文件和审计日志使用本机绝对路径。点「浏览」会打开系统文件框。"
+    "选好身份和要做的事，点「能不能做」。\n"
+    "写操作要两个不同的人同意；同一人点两次不算。\n"
+    "策略和审计路径在「高级」里，默认用自带的 example.yaml。"
 )
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -59,14 +66,60 @@ def new_session_id() -> str:
     return f"sess-{uuid.uuid4().hex[:12]}"
 
 
+def who_zh(role: str) -> str:
+    return ROLE_ZH.get(role, role)
+
+
+def what_zh(tool: str) -> str:
+    return TOOL_ZH.get(tool, tool)
+
+
+def default_actor(role: str, actor: str | None = None) -> str:
+    text = (actor or "").strip()
+    return text or who_zh(role)
+
+
+def needs_dual(result: CheckResult) -> bool:
+    return (not result.allowed) and int(result.approvals_needed or 0) > 0
+
+
+def verdict_title(result: CheckResult) -> str:
+    if result.allowed:
+        return "能"
+    if needs_dual(result):
+        return "要两个人批"
+    return "不能"
+
+
+def human_reason(result: CheckResult) -> str:
+    who = who_zh(result.role)
+    what = what_zh(result.tool)
+    if needs_dual(result):
+        have = list(result.approvers)
+        if not have:
+            return f"{what}要两个人同意。现在还没有人批。"
+        if len(have) == 1:
+            return f"{what}要两个人同意。现在只有 {have[0]} 批了。"
+        return f"{what}还差 {result.approvals_needed} 个人同意。"
+    if result.allowed:
+        if result.approvers:
+            names = "、".join(result.approvers)
+            return f"{who}可以{what}。{names} 已经同意。"
+        return f"{who}可以{what}。"
+    reason = result.reason or ""
+    if "unknown role" in reason:
+        return f"不认识这个身份「{who}」。"
+    if "unknown tool" in reason:
+        return f"没有这项操作「{what}」。"
+    if "budget exceeded" in reason:
+        return "这个会话的次数已经用完。"
+    if "no allow rule" in reason:
+        return f"策略没有允许任何人{what}。"
+    return f"{who}不能{what}。"
+
+
 def format_verdict(result: CheckResult) -> str:
-    title = "允许" if result.allowed else "拒绝"
-    lines = [title, f"原因：{result.reason}"]
-    if result.approvals_needed:
-        lines.append(f"还差 {result.approvals_needed} 个不同审批人")
-    if result.approvers:
-        lines.append("已有审批人：" + "、".join(result.approvers))
-    return "\n".join(lines)
+    return f"{verdict_title(result)}\n{human_reason(result)}"
 
 
 def perform_check(
@@ -207,16 +260,47 @@ def bootstrap_state(policy_path: str, audit_path: str) -> dict[str, Any]:
         "session": new_session_id(),
         "roles": list(ROLES),
         "tools": list(TOOLS),
+        "role_options": [dict(item) for item in ROLE_OPTIONS],
+        "tool_options": [dict(item) for item in TOOL_OPTIONS],
         "how_to": [line for line in HOW_TO.splitlines() if line],
     }
 
 
-def check_to_dict(result: CheckResult, audit_path: str) -> dict[str, Any]:
+def maybe_auto_record(
+    result: CheckResult,
+    audit_path: str,
+    actor: str | None = None,
+) -> dict[str, Any] | None:
+    if needs_dual(result):
+        return None
+    session = (result.session or "").strip()
+    if not session:
+        return None
+    return perform_record(
+        audit_path=audit_path,
+        session=session,
+        actor=default_actor(result.role, actor),
+        tool=result.tool,
+        decision=result.decision,
+        role=result.role,
+        reason=result.reason,
+    )
+
+
+def check_to_dict(
+    result: CheckResult,
+    audit_path: str,
+    recorded: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     data = result.as_dict()
     data["ok"] = True
-    data["title"] = "允许" if result.allowed else "拒绝"
+    data["title"] = verdict_title(result)
+    data["reason_human"] = human_reason(result)
+    data["needs_dual"] = needs_dual(result)
     data["verdict"] = format_verdict(result)
     data["recent"] = recent_events_text(audit_path)
+    if recorded is not None:
+        data["recorded"] = recorded
     return data
 
 
@@ -287,29 +371,33 @@ def dispatch_api(
         if path == "/api/check":
             policy = str(payload.get("policy_path") or defaults.get("policy_path") or "")
             audit = str(payload.get("audit_path") or defaults.get("audit_path") or "")
+            role = str(payload.get("role") or "")
+            actor = str(payload.get("actor") or "") or None
+            session = str(payload.get("session") or "").strip() or new_session_id()
             result = perform_check(
                 policy_path=policy,
                 audit_path=audit,
-                role=str(payload.get("role") or ""),
+                role=role,
                 tool=str(payload.get("tool") or ""),
-                actor=str(payload.get("actor") or "") or None,
-                session=str(payload.get("session") or "") or None,
+                actor=default_actor(role, actor),
+                session=session,
             )
-            return 200, check_to_dict(result, audit)
+            recorded = maybe_auto_record(result, audit, actor)
+            return 200, check_to_dict(result, audit, recorded=recorded)
         if path == "/api/approve":
             audit = str(payload.get("audit_path") or defaults.get("audit_path") or "")
-            session = str(payload.get("session") or "").strip()
+            session = str(payload.get("session") or "").strip() or new_session_id()
             tool = str(payload.get("tool") or "").strip()
-            if not session:
-                return 400, {"ok": False, "error": "请填写会话 ID。"}
-            existing = existing_approvers(audit, session, tool)
-            name = pick_approver_to_submit(
-                str(payload.get("approver1") or payload.get("approver") or ""),
-                str(payload.get("approver2") or ""),
-                existing,
-            )
+            name = str(payload.get("approver") or "").strip()
             if not name:
-                return 400, {"ok": False, "error": "请填写审批人1 或 审批人2。"}
+                existing = existing_approvers(audit, session, tool)
+                name = pick_approver_to_submit(
+                    str(payload.get("approver1") or ""),
+                    str(payload.get("approver2") or ""),
+                    existing,
+                ) or ""
+            if not name:
+                return 400, {"ok": False, "error": "请填写同意的人。"}
             outcome = perform_approve(
                 audit_path=audit, session=session, tool=tool, approver=name
             )
@@ -318,15 +406,17 @@ def dispatch_api(
             policy = str(payload.get("policy_path") or defaults.get("policy_path") or "")
             role = str(payload.get("role") or "")
             if policy and role and tool:
+                actor = str(payload.get("actor") or "") or None
                 checked = perform_check(
                     policy_path=policy,
                     audit_path=audit,
                     role=role,
                     tool=tool,
-                    actor=str(payload.get("actor") or "") or None,
+                    actor=default_actor(role, actor),
                     session=session,
                 )
-                data["check"] = check_to_dict(checked, audit)
+                recorded = maybe_auto_record(checked, audit, actor)
+                data["check"] = check_to_dict(checked, audit, recorded=recorded)
             return 200, data
         if path == "/api/record":
             audit = str(payload.get("audit_path") or defaults.get("audit_path") or "")

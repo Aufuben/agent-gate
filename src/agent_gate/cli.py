@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--policy", default="policies/example.yaml")
     demo.add_argument("--audit", default="audit.jsonl")
 
-    gui = sub.add_parser("gui", help="Local page: check, dual-control, audit")
+    gui = sub.add_parser("gui", help="Local page: who, what, can they do it")
     gui.add_argument("--policy", default="policies/example.yaml")
     gui.add_argument("--audit", default="audit.jsonl")
     gui.add_argument("--host", default="127.0.0.1")
