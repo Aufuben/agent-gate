@@ -1,0 +1,26 @@
+# Example policy for agent-gate.
+# Unknown tools are denied. deny takes precedence over allow.
+# dual_control: two distinct approver ids on the same session+tool.
+
+roles:
+  - intern
+  - engineer
+  - sre
+
+tools:
+  read_file:
+    allow: all
+  http_fetch:
+    allow:
+      - engineer
+      - sre
+  shell:
+    deny:
+      - intern
+  prod_restart:
+    dual_control: true
+    allow:
+      - sre
+
+budget:
+  max_calls_per_session: 100
