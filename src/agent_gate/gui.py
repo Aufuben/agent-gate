@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from agent_gate.fetch import SSL_VERIFY_HINT, SslVerifyError, is_cert_verify_error, redact
 from agent_gate.keys import PROVIDERS
 from agent_gate.report import default_date_range, query_usage
 
@@ -39,6 +40,7 @@ def dispatch_api(path: str, body: dict[str, Any] | None = None) -> tuple[int, di
                 from_date=from_date,
                 to_date=to_date,
                 providers=providers,
+                insecure=bool(payload.get("insecure")),
             )
             return 200, report.as_dict()
         if path == "/api/defaults":
@@ -46,7 +48,11 @@ def dispatch_api(path: str, body: dict[str, Any] | None = None) -> tuple[int, di
             return 200, {"ok": True, "from": start.isoformat(), "to": end.isoformat()}
         return 404, {"ok": False, "error": f"unknown path {path}"}
     except Exception as exc:  # noqa: BLE001 — return errors to the page, never echo keys
-        return 400, {"ok": False, "error": str(exc)}
+        if isinstance(exc, SslVerifyError) or is_cert_verify_error(exc):
+            message = SSL_VERIFY_HINT
+        else:
+            message = redact(str(exc))
+        return 400, {"ok": False, "error": message}
 
 
 class GateHTTPServer:

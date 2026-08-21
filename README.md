@@ -17,7 +17,7 @@ agent-gate gui
 
 1. 把 Key 粘到文本框，一行一把。可写成 `openrouter:sk-or-...`、`deepseek:sk-...`、`openai:sk-...`；`sk-or-` 会自动识别为 OpenRouter。
 2. 日期默认最近 30 天。
-3. 勾选平台，点 **统计额度**。
+3. 勾选平台，点 **统计额度**。公司代理/自签名证书时勾选 **跳过证书校验**（默认关闭）。
 4. 表格只显示掩码（`sk-...abcd`）。底下一行是 **合计**。
 
 提交后页面不再显示完整 Key。
@@ -27,6 +27,8 @@ agent-gate gui
 ```bash
 agent-gate usage --keys-file keys.txt --from 2026-07-01 --to 2026-08-01
 ```
+
+公司代理或自签名证书校验失败时，加上 `--insecure`，或设置 `AGENT_GATE_INSECURE_SSL=1`。默认仍会校验证书。
 
 `keys.txt` 已加入 `.gitignore`。格式见 `keys.example.txt`。
 

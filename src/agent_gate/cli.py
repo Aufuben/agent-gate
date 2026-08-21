@@ -28,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="openrouter,deepseek,openai",
         help="Comma list: openrouter,deepseek,openai",
     )
+    usage.add_argument(
+        "--insecure",
+        action="store_true",
+        help="跳过 TLS 证书校验（公司代理/自签名证书）",
+    )
 
     gui = sub.add_parser("gui", help="Local page: paste keys, 统计额度")
     gui.add_argument("--host", default="127.0.0.1")
@@ -63,6 +68,7 @@ def _run_usage(args: argparse.Namespace) -> int:
         from_date=start,
         to_date=end,
         providers=providers,
+        insecure=bool(args.insecure),
     )
     print(format_table(report), flush=True)
     return 0

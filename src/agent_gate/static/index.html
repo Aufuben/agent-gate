@@ -80,6 +80,7 @@
       <label><input type="checkbox" name="provider" value="deepseek" checked> DeepSeek</label>
       <label><input type="checkbox" name="provider" value="openai" checked> OpenAI</label>
     </div>
+    <label><input type="checkbox" id="insecure"> 跳过证书校验</label>
     <button type="button" id="run">统计额度</button>
     <p id="status"></p>
     <table id="out" hidden>
@@ -140,6 +141,7 @@
             from: $("from").value,
             to: $("to").value,
             providers: selectedProviders(),
+            insecure: $("insecure").checked,
           }),
         });
         const data = await res.json();
@@ -169,7 +171,11 @@
         $("status").textContent = (data.rows || []).length ? "" : "没有可查询的 Key。";
       } catch (err) {
         $("keys").value = "";
-        $("status").textContent = String(err.message || err);
+        let msg = String(err.message || err);
+        if (/CERTIFICATE_VERIFY_FAILED|certificate verify failed|self-signed certificate|_ssl\.c/i.test(msg)) {
+          msg = "公司代理/自签名证书时勾选「跳过证书校验」或设环境变量。";
+        }
+        $("status").textContent = msg;
       } finally {
         $("run").disabled = false;
       }

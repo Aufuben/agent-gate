@@ -3,9 +3,18 @@ from __future__ import annotations
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from functools import partial
 from typing import Any, Callable, Iterable, Sequence
 
-from agent_gate.fetch import HttpError, get_json, redact
+from agent_gate.fetch import (
+    HttpError,
+    SslVerifyError,
+    SSL_VERIFY_HINT,
+    get_json,
+    is_cert_verify_error,
+    redact,
+    resolve_insecure_ssl,
+)
 from agent_gate.keys import PROVIDERS, ParsedKey, mask_key, parse_keys
 from agent_gate.models import OPENAI_PERSONAL_KEY_MSG, UsageReport, UsageRow, format_amount
 from agent_gate.providers import HANDLERS
@@ -62,8 +71,13 @@ def _query_one(
         else:
             message = f"HTTP {exc.status}"
         return UsageRow(masked=parsed.masked, provider=parsed.provider, error=message)
+    except SslVerifyError as exc:
+        return UsageRow(masked=parsed.masked, provider=parsed.provider, error=str(exc))
     except Exception as exc:  # noqa: BLE001 — isolate per key
-        text = redact(str(exc) or type(exc).__name__)
+        if is_cert_verify_error(exc):
+            text = SSL_VERIFY_HINT
+        else:
+            text = redact(str(exc) or type(exc).__name__)
         return UsageRow(masked=parsed.masked, provider=parsed.provider, error=text)
 
 
@@ -74,13 +88,14 @@ def query_usage(
     providers: Sequence[str] | Iterable[str] | None = None,
     http_get: HttpGet | None = None,
     timeout: float = 15.0,
+    insecure: bool | None = None,
 ) -> UsageReport:
     start, end = default_date_range()
     start = from_date or start
     end = to_date or end
     selected = tuple(providers) if providers is not None else PROVIDERS
     parsed_rows = parse_keys(text, providers=selected)
-    getter = http_get or get_json
+    getter = http_get or partial(get_json, insecure=resolve_insecure_ssl(insecure))
     rows: list[UsageRow]
     if not parsed_rows:
         rows = []
