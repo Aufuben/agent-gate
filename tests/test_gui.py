@@ -140,3 +140,100 @@ def test_capture_demo_writes_expected_lines(tmp_path: Path) -> None:
     code, output = capture_demo(str(EXAMPLE_POLICY), str(tmp_path / "audit.jsonl"))
     assert code == EXIT_OK
     assert "demo done" in output
+
+
+def test_page_html_teaches_usage_without_gradient_or_emoji() -> None:
+    from agent_gate.gui import page_html
+
+    html = page_html()
+    assert "检查是否允许" in html
+    assert "浏览" in html
+    assert "写入审计记录" in html
+    assert "gradient" not in html.lower()
+    assert "emoji" not in html.lower()
+    assert "\U0001f389" not in html
+
+
+def test_dispatch_check_intern_prod_restart_denied(tmp_path: Path) -> None:
+    from agent_gate.gui import dispatch_api
+
+    status, data = dispatch_api(
+        "/api/check",
+        {
+            "policy_path": str(EXAMPLE_POLICY),
+            "audit_path": str(tmp_path / "audit.jsonl"),
+            "role": "intern",
+            "tool": "prod_restart",
+            "actor": "实习生甲",
+            "session": "sess-http",
+        },
+    )
+    assert status == 200
+    assert data["allowed"] is False
+    assert data["title"] == "拒绝"
+    assert "intern" in data["reason"]
+
+
+def test_dispatch_browse_uses_injected_picker() -> None:
+    from agent_gate.gui import dispatch_api
+
+    status, data = dispatch_api(
+        "/api/browse",
+        {"kind": "policy", "initial": ""},
+        browse_fn=lambda kind, initial: "/abs/policy.yaml",
+    )
+    assert status == 200
+    assert data["path"] == "/abs/policy.yaml"
+
+
+def test_http_server_serves_page_and_check(tmp_path: Path) -> None:
+    import json
+    from http.client import HTTPConnection
+    from threading import Thread
+
+    from agent_gate.gui import make_server
+
+    server = make_server(
+        policy_path=str(EXAMPLE_POLICY),
+        audit_path=str(tmp_path / "audit.jsonl"),
+        host="127.0.0.1",
+        port=0,
+    )
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", server.port, timeout=5)
+        conn.request("GET", "/")
+        res = conn.getresponse()
+        body = res.read().decode("utf-8")
+        assert res.status == 200
+        assert "检查是否允许" in body
+
+        payload = json.dumps(
+            {
+                "policy_path": str(EXAMPLE_POLICY),
+                "audit_path": str(tmp_path / "audit.jsonl"),
+                "role": "intern",
+                "tool": "prod_restart",
+                "actor": "甲",
+                "session": "s1",
+            }
+        ).encode("utf-8")
+        conn.request(
+            "POST",
+            "/api/check",
+            payload,
+            {"Content-Type": "application/json"},
+        )
+        checked = conn.getresponse()
+        data = json.loads(checked.read().decode("utf-8"))
+        assert checked.status == 200
+        assert data["allowed"] is False
+        assert data["title"] == "拒绝"
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        server.shutdown()
+        thread.join(timeout=2)

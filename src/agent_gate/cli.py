@@ -48,9 +48,12 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--policy", default="policies/example.yaml")
     demo.add_argument("--audit", default="audit.jsonl")
 
-    gui = sub.add_parser("gui", help="Optional: policy in, audit out, last decisions")
+    gui = sub.add_parser("gui", help="Local page: check, dual-control, audit")
     gui.add_argument("--policy", default="policies/example.yaml")
     gui.add_argument("--audit", default="audit.jsonl")
+    gui.add_argument("--host", default="127.0.0.1")
+    gui.add_argument("--port", type=int, default=8765)
+    gui.add_argument("--no-browser", action="store_true")
     return parser
 
 
@@ -109,7 +112,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "gui":
         from agent_gate.gui import run_gui
 
-        return run_gui(policy_path=args.policy, audit_path=args.audit)
+        return run_gui(
+            policy_path=args.policy,
+            audit_path=args.audit,
+            host=args.host,
+            port=args.port,
+            open_browser=not args.no_browser,
+        )
 
     parser.print_help()
     return 2

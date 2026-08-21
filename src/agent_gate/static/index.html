@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agent-gate</title>
+  <style>
+    :root {
+      --bg: #f3efe6;
+      --ink: #161411;
+      --muted: #6f675c;
+      --line: #d4cdc0;
+      --paper: #faf7f1;
+      --accent: #9f2d00;
+      --allow: #1b5e3b;
+      --focus: #9f2d00;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Source Han Sans SC", ui-sans-serif, system-ui, sans-serif;
+      font-size: 16px;
+      line-height: 1.55;
+    }
+    main {
+      max-width: 40rem;
+      margin: 0 auto;
+      padding: 3.75rem 1.5rem 5rem;
+    }
+    .mark {
+      font-family: "Iowan Old Style", Palatino, "Songti SC", "Noto Serif SC", serif;
+      font-size: 0.8rem;
+      letter-spacing: 0.16em;
+      text-transform: lowercase;
+      color: var(--muted);
+      margin: 0 0 0.85rem;
+    }
+    h1 {
+      font-family: "Iowan Old Style", Palatino, "Songti SC", "Noto Serif SC", serif;
+      font-size: 2.15rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin: 0 0 1.5rem;
+    }
+    .how {
+      margin: 0 0 2.75rem;
+      padding: 0;
+      color: var(--ink);
+      font-size: 1.02rem;
+    }
+    .how p { margin: 0 0 0.35rem; }
+    .how p:last-child { margin-bottom: 0; color: var(--muted); font-size: 0.95rem; }
+    hr {
+      border: 0;
+      border-top: 1px solid var(--line);
+      margin: 2.5rem 0;
+    }
+    section h2 {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 1.25rem;
+    }
+    .field { margin-bottom: 1.15rem; }
+    .field label {
+      display: block;
+      font-size: 0.92rem;
+      margin-bottom: 0.4rem;
+    }
+    .hint {
+      margin: 0.4rem 0 0;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .row {
+      display: flex;
+      gap: 0.6rem;
+      align-items: stretch;
+    }
+    .row > input, .row > select { flex: 1; }
+    input, select, button, textarea {
+      font: inherit;
+      color: var(--ink);
+    }
+    input, select {
+      width: 100%;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 2px;
+      padding: 0.65rem 0.75rem;
+      outline: none;
+    }
+    input:focus, select:focus {
+      border-color: var(--focus);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+    }
+    button {
+      border: 1px solid var(--ink);
+      background: transparent;
+      padding: 0.65rem 1rem;
+      border-radius: 2px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: #ece7dc; }
+    button.primary {
+      width: 100%;
+      margin-top: 0.35rem;
+      background: var(--accent);
+      color: #fffaf6;
+      border-color: var(--accent);
+      font-size: 1.15rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      padding: 0.95rem 1.2rem;
+    }
+    button.primary:hover { filter: brightness(1.05); background: var(--accent); }
+    button.quiet { border-color: var(--line); color: var(--ink); }
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.85rem;
+    }
+    @media (max-width: 560px) {
+      .split { grid-template-columns: 1fr; }
+      .row { flex-direction: column; }
+    }
+    .verdict {
+      min-height: 4.5rem;
+      margin: 1.5rem 0 0;
+    }
+    .verdict .title {
+      font-family: "Iowan Old Style", Palatino, "Songti SC", serif;
+      font-size: 2.7rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      line-height: 1.1;
+      color: var(--muted);
+    }
+    .verdict.allow .title { color: var(--allow); }
+    .verdict.deny .title { color: var(--accent); }
+    .verdict.error .title { color: #8a6d1f; }
+    .verdict .reason {
+      margin: 0.55rem 0 0;
+      font-size: 0.98rem;
+      color: var(--ink);
+      white-space: pre-wrap;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+    }
+    .log {
+      margin: 0;
+      background: #1b1814;
+      color: #e8e0d2;
+      padding: 1.15rem 1.2rem;
+      border-radius: 2px;
+      font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 0.75rem;
+      line-height: 1.45;
+      overflow: auto;
+      max-height: 16rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .status {
+      min-height: 1.3rem;
+      margin: 0.7rem 0 0;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="mark">agent-gate</p>
+    <h1>工具调用门</h1>
+    <div class="how" id="how">
+      <p>这是拦截 Agent 工具调用的门。</p>
+      <p>先检查，再执行；本页不真正重启生产。</p>
+      <p>写操作要两个不同的人批准。同一人点两次不算两票。</p>
+      <p>策略文件和审计日志使用本机绝对路径。点「浏览」会打开系统文件框。</p>
+    </div>
+
+    <section>
+      <h2>路径</h2>
+      <div class="field">
+        <label for="policy">策略文件（YAML，绝对路径）</label>
+        <div class="row">
+          <input id="policy" type="text" autocomplete="off" spellcheck="false">
+          <button type="button" class="quiet" id="browse-policy">浏览</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="audit">审计日志（JSONL，绝对路径）</label>
+        <div class="row">
+          <input id="audit" type="text" autocomplete="off" spellcheck="false">
+          <button type="button" class="quiet" id="browse-audit">浏览</button>
+        </div>
+        <p class="hint">浏览器选文件得不到真实路径，所以浏览由本机程序打开系统对话框。</p>
+      </div>
+    </section>
+
+    <hr>
+
+    <section>
+      <h2>检查</h2>
+      <div class="split">
+        <div class="field">
+          <label for="role">角色</label>
+          <select id="role"></select>
+        </div>
+        <div class="field">
+          <label for="tool">工具</label>
+          <select id="tool"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="actor">操作者名字</label>
+        <input id="actor" type="text" autocomplete="off">
+      </div>
+      <button type="button" class="primary" id="check">检查是否允许</button>
+      <div class="verdict" id="verdict-box">
+        <div class="title" id="verdict-title">尚未检查</div>
+        <p class="reason" id="verdict-reason"></p>
+      </div>
+    </section>
+
+    <hr>
+
+    <section>
+      <h2>双人批准</h2>
+      <div class="field">
+        <label for="session">会话 ID（同一会话才能凑齐两票）</label>
+        <div class="row">
+          <input id="session" type="text" autocomplete="off" spellcheck="false">
+          <button type="button" class="quiet" id="new-session">换一个</button>
+        </div>
+      </div>
+      <div class="split">
+        <div class="field">
+          <label for="approver1">审批人1</label>
+          <input id="approver1" type="text" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="approver2">审批人2</label>
+          <input id="approver2" type="text" autocomplete="off">
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" id="approve">批准</button>
+      </div>
+      <p class="hint">每次点批准登记一个人：先 1 后 2。同一人两次只算一票。批准后会再检查一次。</p>
+      <p class="status" id="approve-status"></p>
+    </section>
+
+    <hr>
+
+    <section>
+      <h2>记录</h2>
+      <div class="actions">
+        <button type="button" id="record">写入审计记录</button>
+        <button type="button" class="quiet" id="demo">跑官方 demo</button>
+      </div>
+      <p class="status" id="record-status"></p>
+    </section>
+
+    <hr>
+
+    <section>
+      <h2>最近审计 / 检查结果</h2>
+      <pre class="log" id="log">正在连接本机服务…</pre>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let lastCheck = null;
+
+    function form() {
+      return {
+        policy_path: $("policy").value.trim(),
+        audit_path: $("audit").value.trim(),
+        role: $("role").value,
+        tool: $("tool").value,
+        actor: $("actor").value.trim(),
+        session: $("session").value.trim(),
+        approver1: $("approver1").value,
+        approver2: $("approver2").value,
+      };
+    }
+
+    async function api(path, body) {
+      const res = await fetch(path, {
+        method: body === undefined ? "GET" : "POST",
+        headers: body === undefined ? {} : { "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || ("请求失败 " + res.status));
+      }
+      return data;
+    }
+
+    function setLog(text) {
+      $("log").textContent = text || "";
+    }
+
+    function setVerdict(title, reason, kind) {
+      const box = $("verdict-box");
+      box.className = "verdict" + (kind ? " " + kind : "");
+      $("verdict-title").textContent = title;
+      $("verdict-reason").textContent = reason || "";
+    }
+
+    function applyCheck(data) {
+      lastCheck = data;
+      const kind = data.allowed ? "allow" : "deny";
+      const parts = [];
+      if (data.reason) parts.push("原因：" + data.reason);
+      if (data.approvals_needed) parts.push("还差 " + data.approvals_needed + " 个不同审批人");
+      if (data.approvers && data.approvers.length) {
+        parts.push("已有审批人：" + data.approvers.join("、"));
+      }
+      setVerdict(data.title, parts.join("\n"), kind);
+      setLog((data.verdict || "") + (data.recent ? "\n\n—— 最近审计 ——\n" + data.recent : ""));
+    }
+
+    function fillSelect(el, values, current) {
+      el.innerHTML = "";
+      values.forEach((v) => {
+        const o = document.createElement("option");
+        o.value = v;
+        o.textContent = v;
+        el.appendChild(o);
+      });
+      if (current) el.value = current;
+    }
+
+    async function boot() {
+      const data = await api("/api/state");
+      $("policy").value = data.policy_path;
+      $("audit").value = data.audit_path;
+      $("session").value = data.session;
+      fillSelect($("role"), data.roles, "intern");
+      fillSelect($("tool"), data.tools, "read_file");
+      if (data.how_to && data.how_to.length) {
+        $("how").innerHTML = data.how_to.map((line, i) =>
+          "<p>" + line.replace(/</g, "&lt;") + "</p>"
+        ).join("");
+      }
+      setLog("策略文件=" + data.policy_path + "\n审计日志=" + data.audit_path + "\n会话=" + data.session);
+    }
+
+    $("check").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/check", form());
+        applyCheck(data);
+      } catch (err) {
+        lastCheck = null;
+        setVerdict("无法检查", String(err.message || err), "error");
+        setLog("无法检查：" + (err.message || err));
+      }
+    });
+
+    $("approve").addEventListener("click", async () => {
+      $("approve-status").textContent = "";
+      try {
+        const data = await api("/api/approve", form());
+        $("approve-status").textContent = data.message;
+        if (data.check) applyCheck(data.check);
+        else setLog(data.message + (data.recent ? "\n\n—— 最近审计 ——\n" + data.recent : ""));
+      } catch (err) {
+        $("approve-status").textContent = String(err.message || err);
+      }
+    });
+
+    $("record").addEventListener("click", async () => {
+      $("record-status").textContent = "";
+      if (!lastCheck) {
+        $("record-status").textContent = "请先点「检查是否允许」。";
+        return;
+      }
+      const actor = lastCheck.actor || $("actor").value.trim();
+      if (!actor) {
+        $("record-status").textContent = "请填写操作者名字。";
+        return;
+      }
+      const session = lastCheck.session || $("session").value.trim();
+      if (!session) {
+        $("record-status").textContent = "请填写会话 ID。";
+        return;
+      }
+      try {
+        const data = await api("/api/record", {
+          audit_path: $("audit").value.trim(),
+          session: session,
+          actor: actor,
+          tool: lastCheck.tool,
+          decision: lastCheck.decision,
+          role: lastCheck.role,
+          reason: lastCheck.reason,
+        });
+        $("record-status").textContent = "已写入审计记录。";
+        setLog("已写入审计记录：\n" + JSON.stringify(data.row, null, 0) + "\n\n—— 最近审计 ——\n" + (data.recent || ""));
+      } catch (err) {
+        $("record-status").textContent = String(err.message || err);
+      }
+    });
+
+    $("demo").addEventListener("click", async () => {
+      $("record-status").textContent = "";
+      try {
+        const data = await api("/api/demo", form());
+        $("record-status").textContent = "demo 退出码 " + data.code;
+        setLog("demo 退出码 " + data.code + "\n" + (data.output || "") + "\n\n—— 最近审计 ——\n" + (data.recent || ""));
+      } catch (err) {
+        $("record-status").textContent = String(err.message || err);
+      }
+    });
+
+    $("browse-policy").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/browse", { kind: "policy", initial: $("policy").value });
+        if (data.path) $("policy").value = data.path;
+      } catch (err) {
+        setLog("浏览失败：" + (err.message || err));
+      }
+    });
+
+    $("browse-audit").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/browse", { kind: "audit", initial: $("audit").value });
+        if (data.path) $("audit").value = data.path;
+      } catch (err) {
+        setLog("浏览失败：" + (err.message || err));
+      }
+    });
+
+    $("new-session").addEventListener("click", async () => {
+      const data = await api("/api/session");
+      $("session").value = data.session;
+      lastCheck = null;
+    });
+
+    boot().catch((err) => setLog("无法连接本机服务：" + (err.message || err)));
+  </script>
+</body>
+</html>

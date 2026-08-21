@@ -16,11 +16,13 @@ TOOLS = ("read_file", "http_fetch", "shell", "prod_restart")
 
 HOW_TO = (
     "这是拦截 Agent 工具调用的门。\n"
-    "先检查，再执行；本窗口不真正重启生产。\n"
+    "先检查，再执行；本页不真正重启生产。\n"
     "写操作要两个不同的人批准。\n"
     "同一人点两次批准不算两票。\n"
-    "下面按编号填写路径、角色、工具后点按钮。"
+    "策略文件和审计日志使用本机绝对路径。点「浏览」会打开系统文件框。"
 )
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def repo_root() -> Path:
@@ -193,315 +195,299 @@ def capture_demo(policy_path: str, audit_path: str) -> tuple[int, str]:
     return code, buf.getvalue()
 
 
-def run_gui(policy_path: str = "policies/example.yaml", audit_path: str = "audit.jsonl") -> int:
+def page_html() -> str:
+    return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+
+def bootstrap_state(policy_path: str, audit_path: str) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "policy_path": resolve_policy_path(policy_path),
+        "audit_path": abs_path(audit_path) or default_audit_path(),
+        "session": new_session_id(),
+        "roles": list(ROLES),
+        "tools": list(TOOLS),
+        "how_to": [line for line in HOW_TO.splitlines() if line],
+    }
+
+
+def check_to_dict(result: CheckResult, audit_path: str) -> dict[str, Any]:
+    data = result.as_dict()
+    data["ok"] = True
+    data["title"] = "允许" if result.allowed else "拒绝"
+    data["verdict"] = format_verdict(result)
+    data["recent"] = recent_events_text(audit_path)
+    return data
+
+
+def approve_to_dict(outcome: ApproveResult) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "duplicate": outcome.duplicate,
+        "count": outcome.count,
+        "unique_approvers": list(outcome.unique_approvers),
+        "dual_control_met": outcome.dual_control_met,
+        "message": outcome.message,
+        "row": outcome.row,
+    }
+
+
+def native_browse(kind: str, initial: str = "") -> str:
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
     try:
-        import tkinter as tk
-        from tkinter import filedialog, messagebox, ttk
-    except ImportError as exc:
-        print(f"gui unavailable: tkinter is not installed ({exc})", flush=True)
-        return 2
-
-    try:
-        root = tk.Tk()
-    except tk.TclError as exc:
-        print(f"gui unavailable: {exc}", flush=True)
-        return 2
-
-    root.title("agent-gate")
-    root.minsize(700, 640)
-    root.geometry("840x860")
-
-    policy_var = tk.StringVar(value=resolve_policy_path(policy_path))
-    audit_var = tk.StringVar(value=abs_path(audit_path) or default_audit_path())
-    role_var = tk.StringVar(value="intern")
-    tool_var = tk.StringVar(value="read_file")
-    actor_var = tk.StringVar(value="")
-    session_var = tk.StringVar(value=new_session_id())
-    approver1_var = tk.StringVar(value="")
-    approver2_var = tk.StringVar(value="")
-
-    last_result: dict[str, CheckResult | None] = {"value": None}
-
-    style = ttk.Style()
-    try:
-        style.theme_use("aqua")
+        root.wm_attributes("-topmost", True)
     except tk.TclError:
         pass
-    style.configure("HowTo.TLabel", foreground="#1f2937")
-    style.configure("Step.TLabel", foreground="#111827")
-    style.configure("Hint.TLabel", foreground="#4b5563")
-    style.configure("Check.TButton", font=("", 15, "bold"), padding=(12, 8))
-    style.configure("Action.TButton", padding=(8, 6))
+    root.update()
+    start = Path(initial) if (initial or "").strip() else Path.cwd()
+    parent = start.parent if start.suffix else start
+    if not parent.exists():
+        parent = Path.cwd()
+    try:
+        if kind == "policy":
+            chosen = filedialog.askopenfilename(
+                title="选择策略文件",
+                filetypes=[("YAML", "*.yaml"), ("YAML", "*.yml"), ("全部", "*")],
+                initialdir=str(parent),
+            )
+        else:
+            chosen = filedialog.asksaveasfilename(
+                title="选择审计日志",
+                defaultextension=".jsonl",
+                filetypes=[("JSONL", "*.jsonl"), ("全部", "*")],
+                initialdir=str(parent),
+                initialfile=start.name if start.suffix else "audit.jsonl",
+            )
+    finally:
+        root.destroy()
+    return abs_path(chosen) if chosen else ""
 
-    outer = ttk.Frame(root, padding=14)
-    outer.pack(fill="both", expand=True)
-    outer.columnconfigure(0, weight=1)
-    outer.rowconfigure(1, weight=1)
-    outer.rowconfigure(2, weight=1)
 
-    how = ttk.LabelFrame(outer, text="怎么用", padding=8)
-    how.grid(row=0, column=0, sticky="ew")
-    ttk.Label(how, text=HOW_TO, style="HowTo.TLabel", justify="left").pack(anchor="w")
-
-    canvas_hold = ttk.Frame(outer)
-    canvas_hold.grid(row=1, column=0, sticky="nsew", pady=(10, 8))
-    canvas_hold.columnconfigure(0, weight=1)
-    canvas_hold.rowconfigure(0, weight=1)
-    canvas = tk.Canvas(canvas_hold, highlightthickness=0, borderwidth=0)
-    canvas_scroll = ttk.Scrollbar(canvas_hold, orient="vertical", command=canvas.yview)
-    canvas.configure(yscrollcommand=canvas_scroll.set)
-    canvas.grid(row=0, column=0, sticky="nsew")
-    canvas_scroll.grid(row=0, column=1, sticky="ns")
-
-    steps = ttk.Frame(canvas)
-    steps.columnconfigure(1, weight=1)
-    steps_window = canvas.create_window((0, 0), window=steps, anchor="nw")
-
-    def _sync_scroll(_event: object | None = None) -> None:
-        canvas.configure(scrollregion=canvas.bbox("all"))
-        canvas.itemconfigure(steps_window, width=canvas.winfo_width())
-
-    steps.bind("<Configure>", _sync_scroll)
-    canvas.bind("<Configure>", _sync_scroll)
-
-    def _on_mousewheel(event: tk.Event) -> None:
-        canvas.yview_scroll(int(-1 * event.delta), "units")
-
-    canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
-    canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
-
-    def add_step_label(row: int, text: str) -> None:
-        ttk.Label(steps, text=text, style="Step.TLabel").grid(
-            row=row, column=0, columnspan=3, sticky="w", pady=(6, 2)
-        )
-
-    def normalize_paths() -> tuple[str, str]:
-        policy = resolve_policy_path(policy_var.get())
-        audit = abs_path(audit_var.get()) or default_audit_path()
-        policy_var.set(policy)
-        audit_var.set(audit)
-        return policy, audit
-
-    def browse_policy() -> None:
-        initial = Path(policy_var.get() or default_policy_path())
-        chosen = filedialog.askopenfilename(
-            title="选择策略文件",
-            filetypes=[("YAML", "*.yaml"), ("YAML", "*.yml"), ("全部", "*")],
-            initialdir=str(initial.parent) if initial.parent.exists() else str(repo_root()),
-        )
-        if chosen:
-            policy_var.set(abs_path(chosen) or chosen)
-
-    def browse_audit() -> None:
-        initial = Path(audit_var.get() or default_audit_path())
-        chosen = filedialog.asksaveasfilename(
-            title="选择审计日志",
-            defaultextension=".jsonl",
-            filetypes=[("JSONL", "*.jsonl"), ("全部", "*")],
-            initialdir=str(initial.parent) if initial.parent.exists() else str(Path.cwd()),
-            initialfile=initial.name or "audit.jsonl",
-        )
-        if chosen:
-            audit_var.set(abs_path(chosen) or chosen)
-
-    add_step_label(0, "1. 策略文件（绝对路径）")
-    policy_entry = ttk.Entry(steps, textvariable=policy_var)
-    policy_entry.grid(row=1, column=0, columnspan=2, sticky="ew")
-    ttk.Button(steps, text="浏览", command=browse_policy).grid(row=1, column=2, padx=(8, 0))
-
-    add_step_label(2, "2. 审计日志（绝对路径）")
-    audit_entry = ttk.Entry(steps, textvariable=audit_var)
-    audit_entry.grid(row=3, column=0, columnspan=2, sticky="ew")
-    ttk.Button(steps, text="浏览", command=browse_audit).grid(row=3, column=2, padx=(8, 0))
-
-    add_step_label(4, "3. 角色")
-    role_box = ttk.Combobox(steps, textvariable=role_var, values=ROLES, state="readonly", width=20)
-    role_box.grid(row=5, column=0, sticky="w")
-
-    add_step_label(6, "4. 工具")
-    tool_box = ttk.Combobox(steps, textvariable=tool_var, values=TOOLS, state="readonly", width=20)
-    tool_box.grid(row=7, column=0, sticky="w")
-
-    add_step_label(8, "5. 操作者名字")
-    ttk.Entry(steps, textvariable=actor_var, width=28).grid(row=9, column=0, columnspan=2, sticky="w")
-
-    add_step_label(10, "6. 点按钮：按当前策略检查是否允许")
-    tk.Button(
-        steps,
-        text="检查是否允许",
-        command=lambda: on_check(),
-        font=("", 18, "bold"),
-        padx=18,
-        pady=8,
-    ).grid(row=11, column=0, columnspan=2, sticky="w", pady=(2, 4))
-
-    verdict_title = tk.Label(steps, text="尚未检查", font=("", 28, "bold"), fg="#4b5563", anchor="w")
-    verdict_title.grid(row=12, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-    verdict_detail = tk.Label(steps, text="", font=("", 13), fg="#111827", anchor="w", justify="left", wraplength=780)
-    verdict_detail.grid(row=13, column=0, columnspan=3, sticky="ew")
-
-    add_step_label(14, "7. 会话 ID（默认已生成；双人批准必须用同一个）")
-    ttk.Entry(steps, textvariable=session_var).grid(row=15, column=0, columnspan=2, sticky="ew")
-    ttk.Button(steps, text="换一个", command=lambda: session_var.set(new_session_id())).grid(
-        row=15, column=2, padx=(8, 0)
-    )
-
-    add_step_label(16, "8. 审批人1、审批人2（每次点批准登记一个人：先 1 后 2）")
-    ttk.Label(steps, text="审批人1").grid(row=17, column=0, sticky="w")
-    ttk.Entry(steps, textvariable=approver1_var, width=18).grid(row=17, column=1, sticky="w")
-    ttk.Label(steps, text="审批人2").grid(row=18, column=0, sticky="w", pady=(4, 0))
-    ttk.Entry(steps, textvariable=approver2_var, width=18).grid(row=18, column=1, sticky="w", pady=(4, 0))
-    ttk.Button(steps, text="批准", style="Action.TButton", command=lambda: on_approve()).grid(
-        row=17, column=2, rowspan=2, padx=(8, 0), sticky="ns"
-    )
-    ttk.Label(
-        steps,
-        text="同一人点两次不算两票。点批准后会按当前策略再检查一次。",
-        style="Hint.TLabel",
-    ).grid(row=19, column=0, columnspan=3, sticky="w", pady=(4, 0))
-
-    add_step_label(20, "9. 把刚才的检查结果写入审计记录")
-    ttk.Button(steps, text="写入审计记录", style="Action.TButton", command=lambda: on_record()).grid(
-        row=21, column=0, sticky="w"
-    )
-
-    add_step_label(22, "10. 可选：跑官方 demo（输出写到下方日志）")
-    ttk.Button(steps, text="跑官方 demo", command=lambda: on_demo()).grid(row=23, column=0, sticky="w")
-
-    log_frame = ttk.LabelFrame(outer, text="最近审计 / 检查结果", padding=6)
-    log_frame.grid(row=2, column=0, sticky="nsew")
-    log_frame.columnconfigure(0, weight=1)
-    log_frame.rowconfigure(0, weight=1)
-    log = tk.Text(log_frame, height=10, wrap="word", state="disabled")
-    scroll = ttk.Scrollbar(log_frame, command=log.yview)
-    log.configure(yscrollcommand=scroll.set)
-    log.grid(row=0, column=0, sticky="nsew")
-    scroll.grid(row=0, column=1, sticky="ns")
-
-    def set_log(text: str) -> None:
-        log.configure(state="normal")
-        log.delete("1.0", "end")
-        log.insert("1.0", text)
-        log.configure(state="disabled")
-
-    def refresh_log(header: str) -> None:
-        _, audit = normalize_paths()
-        set_log(header.rstrip() + "\n\n—— 最近审计 ——\n" + recent_events_text(audit))
-
-    def show_verdict(title: str, detail: str, kind: str) -> None:
-        colors = {"allow": "#127a2c", "deny": "#b42318", "error": "#9a6700", "idle": "#4b5563"}
-        verdict_title.config(text=title, fg=colors.get(kind, "#111827"))
-        verdict_detail.config(text=detail)
-
-    def apply_check_result(result: CheckResult) -> None:
-        last_result["value"] = result
-        kind = "allow" if result.allowed else "deny"
-        title = "允许" if result.allowed else "拒绝"
-        extra = []
-        if result.approvals_needed:
-            extra.append(f"还差 {result.approvals_needed} 个不同审批人")
-        if result.approvers:
-            extra.append("已有审批人：" + "、".join(result.approvers))
-        detail = "原因：" + result.reason
-        if extra:
-            detail += "\n" + "\n".join(extra)
-        show_verdict(title, detail, kind)
-        refresh_log(format_verdict(result))
-
-    def on_check() -> None:
-        policy, audit = normalize_paths()
-        session = session_var.get().strip() or None
-        actor = actor_var.get().strip() or None
-        try:
+def dispatch_api(
+    path: str,
+    body: dict[str, Any] | None = None,
+    *,
+    defaults: dict[str, str] | None = None,
+    browse_fn: Any = None,
+) -> tuple[int, dict[str, Any]]:
+    payload = body or {}
+    defaults = defaults or {}
+    try:
+        if path == "/api/state":
+            return 200, bootstrap_state(
+                defaults.get("policy_path", "policies/example.yaml"),
+                defaults.get("audit_path", "audit.jsonl"),
+            )
+        if path == "/api/session":
+            return 200, {"ok": True, "session": new_session_id()}
+        if path == "/api/check":
+            policy = str(payload.get("policy_path") or defaults.get("policy_path") or "")
+            audit = str(payload.get("audit_path") or defaults.get("audit_path") or "")
             result = perform_check(
                 policy_path=policy,
                 audit_path=audit,
-                role=role_var.get().strip(),
-                tool=tool_var.get().strip(),
-                actor=actor,
-                session=session,
+                role=str(payload.get("role") or ""),
+                tool=str(payload.get("tool") or ""),
+                actor=str(payload.get("actor") or "") or None,
+                session=str(payload.get("session") or "") or None,
             )
-        except Exception as exc:  # noqa: BLE001 — surface load/IO errors in the panel
-            last_result["value"] = None
-            show_verdict("无法检查", str(exc), "error")
-            refresh_log(f"无法检查：{exc}")
-            return
-        apply_check_result(result)
-
-    def on_approve() -> None:
-        _, audit = normalize_paths()
-        session = session_var.get().strip()
-        tool = tool_var.get().strip()
-        if not session:
-            messagebox.showinfo("agent-gate", "请填写会话 ID。")
-            return
-        existing = existing_approvers(audit, session, tool)
-        name = pick_approver_to_submit(approver1_var.get(), approver2_var.get(), existing)
-        if not name:
-            messagebox.showinfo("agent-gate", "请填写审批人1 或 审批人2。")
-            return
-        try:
+            return 200, check_to_dict(result, audit)
+        if path == "/api/approve":
+            audit = str(payload.get("audit_path") or defaults.get("audit_path") or "")
+            session = str(payload.get("session") or "").strip()
+            tool = str(payload.get("tool") or "").strip()
+            if not session:
+                return 400, {"ok": False, "error": "请填写会话 ID。"}
+            existing = existing_approvers(audit, session, tool)
+            name = pick_approver_to_submit(
+                str(payload.get("approver1") or payload.get("approver") or ""),
+                str(payload.get("approver2") or ""),
+                existing,
+            )
+            if not name:
+                return 400, {"ok": False, "error": "请填写审批人1 或 审批人2。"}
             outcome = perform_approve(
                 audit_path=audit, session=session, tool=tool, approver=name
             )
-        except Exception as exc:  # noqa: BLE001
-            show_verdict("无法批准", str(exc), "error")
-            refresh_log(f"无法批准：{exc}")
-            return
-        if outcome.duplicate:
-            messagebox.showinfo("agent-gate", outcome.message)
-        refresh_log(outcome.message)
-        on_check()
-
-    def on_record() -> None:
-        _, audit = normalize_paths()
-        result = last_result["value"]
-        if result is None:
-            messagebox.showinfo("agent-gate", "请先点「检查是否允许」。")
-            return
-        actor = (result.actor or actor_var.get() or "").strip()
-        if not actor:
-            messagebox.showinfo("agent-gate", "请填写操作者名字。")
-            return
-        session = (result.session or session_var.get() or "").strip()
-        if not session:
-            messagebox.showinfo("agent-gate", "请填写会话 ID。")
-            return
-        try:
+            data = approve_to_dict(outcome)
+            data["recent"] = recent_events_text(audit)
+            policy = str(payload.get("policy_path") or defaults.get("policy_path") or "")
+            role = str(payload.get("role") or "")
+            if policy and role and tool:
+                checked = perform_check(
+                    policy_path=policy,
+                    audit_path=audit,
+                    role=role,
+                    tool=tool,
+                    actor=str(payload.get("actor") or "") or None,
+                    session=session,
+                )
+                data["check"] = check_to_dict(checked, audit)
+            return 200, data
+        if path == "/api/record":
+            audit = str(payload.get("audit_path") or defaults.get("audit_path") or "")
             row = perform_record(
                 audit_path=audit,
-                session=session,
-                actor=actor,
-                tool=result.tool,
-                decision=result.decision,
-                role=result.role,
-                reason=result.reason,
+                session=str(payload.get("session") or ""),
+                actor=str(payload.get("actor") or ""),
+                tool=str(payload.get("tool") or ""),
+                decision=str(payload.get("decision") or ""),
+                role=str(payload.get("role") or "") or None,
+                reason=str(payload.get("reason") or "") or None,
             )
-        except Exception as exc:  # noqa: BLE001
-            show_verdict("无法写入", str(exc), "error")
-            refresh_log(f"无法写入审计：{exc}")
-            return
-        refresh_log("已写入审计记录：\n" + json.dumps(row, ensure_ascii=False))
-
-    def on_demo() -> None:
-        policy, audit = normalize_paths()
-        try:
+            return 200, {"ok": True, "row": row, "recent": recent_events_text(audit)}
+        if path == "/api/demo":
+            policy = str(payload.get("policy_path") or defaults.get("policy_path") or "")
+            audit = str(payload.get("audit_path") or defaults.get("audit_path") or "")
             code, output = capture_demo(policy, audit)
-        except Exception as exc:  # noqa: BLE001
-            refresh_log(f"demo 失败：{exc}")
+            return 200, {
+                "ok": True,
+                "code": code,
+                "output": output,
+                "recent": recent_events_text(audit),
+            }
+        if path == "/api/browse":
+            kind = str(payload.get("kind") or "policy")
+            picker = browse_fn or native_browse
+            chosen = picker(kind, str(payload.get("initial") or ""))
+            return 200, {"ok": True, "path": chosen}
+        if path == "/api/recent":
+            audit = str(payload.get("audit_path") or defaults.get("audit_path") or "")
+            return 200, {"ok": True, "recent": recent_events_text(audit)}
+        return 404, {"ok": False, "error": f"unknown path {path}"}
+    except Exception as exc:  # noqa: BLE001 — return load/IO errors to the page
+        return 400, {"ok": False, "error": str(exc)}
+
+
+class GateHTTPServer:
+    """Thin wrapper so tests can start/stop a local server without opening a browser."""
+
+    def __init__(self, server: Any) -> None:
+        self.server = server
+
+    @property
+    def url(self) -> str:
+        host, port = self.server.server_address[:2]
+        return f"http://{host}:{port}/"
+
+    @property
+    def port(self) -> int:
+        return int(self.server.server_address[1])
+
+    def serve_forever(self) -> None:
+        self.server.serve_forever()
+
+    def shutdown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def make_server(
+    policy_path: str = "policies/example.yaml",
+    audit_path: str = "audit.jsonl",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+) -> GateHTTPServer:
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    defaults = {
+        "policy_path": resolve_policy_path(policy_path),
+        "audit_path": abs_path(audit_path) or default_audit_path(),
+    }
+    html = page_html()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt: str, *args: Any) -> None:
             return
-        header = f"demo 退出码 {code}\n{output.strip() or '(无输出)'}"
-        refresh_log(header)
 
-    def on_path_focus_out(_event: object | None = None) -> None:
-        normalize_paths()
+        def _send(self, status: int, body: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
 
-    policy_entry.bind("<FocusOut>", on_path_focus_out)
-    audit_entry.bind("<FocusOut>", on_path_focus_out)
+        def _read_json(self) -> dict[str, Any]:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0:
+                return {}
+            raw = self.rfile.read(length)
+            if not raw:
+                return {}
+            data = json.loads(raw.decode("utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("JSON body must be an object")
+            return data
 
-    normalize_paths()
-    refresh_log(
-        f"策略文件={policy_var.get()}\n审计日志={audit_var.get()}\n会话={session_var.get()}"
+        def do_GET(self) -> None:  # noqa: N802
+            route = self.path.split("?", 1)[0]
+            if route in {"/", "/index.html"}:
+                payload = html.encode("utf-8")
+                self._send(200, payload, "text/html; charset=utf-8")
+                return
+            if route.startswith("/api/"):
+                status, data = dispatch_api(route, {}, defaults=defaults)
+                blob = json.dumps(data, ensure_ascii=False).encode("utf-8")
+                self._send(status, blob, "application/json; charset=utf-8")
+                return
+            self._send(404, b"not found", "text/plain; charset=utf-8")
+
+        def do_POST(self) -> None:  # noqa: N802
+            route = self.path.split("?", 1)[0]
+            try:
+                body = self._read_json()
+            except (ValueError, json.JSONDecodeError) as exc:
+                blob = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode(
+                    "utf-8"
+                )
+                self._send(400, blob, "application/json; charset=utf-8")
+                return
+            status, data = dispatch_api(route, body, defaults=defaults)
+            blob = json.dumps(data, ensure_ascii=False).encode("utf-8")
+            self._send(status, blob, "application/json; charset=utf-8")
+
+    try:
+        httpd = HTTPServer((host, port), Handler)
+    except OSError:
+        if port == 0:
+            raise
+        httpd = HTTPServer((host, 0), Handler)
+    return GateHTTPServer(httpd)
+
+
+def run_gui(
+    policy_path: str = "policies/example.yaml",
+    audit_path: str = "audit.jsonl",
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    open_browser: bool = True,
+) -> int:
+    import threading
+    import time
+    import webbrowser
+
+    server = make_server(
+        policy_path=policy_path, audit_path=audit_path, host=host, port=port
     )
-    root.mainloop()
+    url = server.url
+    print(f"agent-gate gui  {url}", flush=True)
+    if open_browser:
+        def _open() -> None:
+            time.sleep(0.25)
+            webbrowser.open(url)
+
+        threading.Thread(target=_open, daemon=True).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped", flush=True)
+    finally:
+        server.server.server_close()
     return 0
