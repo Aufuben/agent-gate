@@ -4,22 +4,33 @@ import json
 from pathlib import Path
 
 
+def abs_path(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    return str(Path(text).expanduser().resolve())
+
+
 def run_gui(policy_path: str = "policies/example.yaml", audit_path: str = "audit.jsonl") -> int:
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
     except ImportError as exc:
-        print(f"gui unavailable: {exc}", flush=True)
+        print(f"gui unavailable: tkinter is not installed ({exc})", flush=True)
         return 2
 
     from agent_gate.audit import AuditLog
 
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        print(f"gui unavailable: {exc}", flush=True)
+        return 2
     root.title("agent-gate")
     root.minsize(640, 420)
 
-    policy_var = tk.StringVar(value=policy_path)
-    audit_var = tk.StringVar(value=audit_path)
+    policy_var = tk.StringVar(value=abs_path(policy_path) or policy_path)
+    audit_var = tk.StringVar(value=abs_path(audit_path) or audit_path)
 
     frm = ttk.Frame(root, padding=12)
     frm.pack(fill="both", expand=True)
@@ -30,7 +41,10 @@ def run_gui(policy_path: str = "policies/example.yaml", audit_path: str = "audit
     ttk.Button(
         frm,
         text="选择 policy",
-        command=lambda: _pick_file(policy_var, filetypes=[("YAML", "*.yaml *.yml")]),
+        command=lambda: _pick_file(
+            policy_var,
+            filetypes=[("YAML", "*.yaml"), ("YAML", "*.yml"), ("All", "*")],
+        ),
     ).grid(row=1, column=2, padx=(8, 0))
 
     ttk.Label(frm, text="输出 = audit 日志路径").grid(row=2, column=0, sticky="w")
@@ -48,6 +62,12 @@ def run_gui(policy_path: str = "policies/example.yaml", audit_path: str = "audit
     frm.rowconfigure(5, weight=1)
 
     def refresh() -> None:
+        policy_resolved = abs_path(policy_var.get())
+        audit_resolved = abs_path(audit_var.get())
+        if policy_resolved:
+            policy_var.set(policy_resolved)
+        if audit_resolved:
+            audit_var.set(audit_resolved)
         path = Path(audit_var.get())
         text.delete("1.0", "end")
         header = (
@@ -74,7 +94,7 @@ def run_gui(policy_path: str = "policies/example.yaml", audit_path: str = "audit
     def _pick_file(var: tk.StringVar, filetypes: list) -> None:
         chosen = filedialog.askopenfilename(filetypes=filetypes)
         if chosen:
-            var.set(chosen)
+            var.set(abs_path(chosen) or chosen)
             refresh()
 
     def on_policy_missing() -> None:

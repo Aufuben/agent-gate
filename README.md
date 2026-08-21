@@ -2,8 +2,6 @@
 
 内部 Agent 的工具调用控制面。Agent 必须先 `check` 再执行；决策写入审计日志；标了 `dual_control` 的写操作/破坏性工具在凑齐两个不同审批人 id 之前一律拒绝。
 
-不是聊天机器人。
-
 ## 做什么
 
 - 拦截工具调用：按 YAML policy 的角色 allow/deny 决定放行或拒绝
@@ -67,10 +65,18 @@ agent-gate check --policy policies/example.yaml --role sre --tool prod_restart -
 
 agent-gate export-audit --from 2026-01-01 --out audit.csv
 agent-gate demo
-# 可选：agent-gate gui
+agent-gate gui
 ```
 
 `--audit` 默认 `./audit.jsonl`。`check`：放行退出 0，拒绝退出 1。
+
+## 图形界面
+
+```bash
+agent-gate gui
+```
+
+窗口里填写 **policy 路径（输入）** 和 **audit 日志路径（输出）**，显示最近的决策。需要本机 Python 带 tkinter。
 
 ### Demo 退出码
 

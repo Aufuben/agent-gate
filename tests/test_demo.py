@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.conftest import EXAMPLE_POLICY, ROOT
+ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE_POLICY = ROOT / "policies" / "example.yaml"
 
 
 def test_demo_exit_codes_documented() -> None:

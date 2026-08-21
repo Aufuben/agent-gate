@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.conftest import EXAMPLE_POLICY
+EXAMPLE_POLICY = Path(__file__).resolve().parents[1] / "policies" / "example.yaml"
 
 
 def test_cli_check_intern_prod_restart_exits_one() -> None:
