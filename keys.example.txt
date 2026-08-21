@@ -1,0 +1,7 @@
+# One API key per line.
+# Optional provider prefix. Lines starting with # are ignored.
+# Copy to keys.txt (gitignored) before: agent-gate usage --keys-file keys.txt
+
+openrouter:sk-or-v1-xxxxxxxx
+deepseek:sk-xxxxxxxx
+openai:sk-xxxxxxxx

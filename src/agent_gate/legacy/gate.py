@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agent_gate.audit import APPROVAL, DECISION, AuditLog, as_args
-from agent_gate.policy import Policy, ToolRule
+from agent_gate.legacy.audit import APPROVAL, DECISION, AuditLog, as_args
+from agent_gate.legacy.policy import Policy, ToolRule
 
 
 DUAL_CONTROL_N = 2

@@ -63,7 +63,7 @@ def test_unknown_tool_denied(gate) -> None:
 
 
 def test_budget_max_calls_per_session(tmp_path: Path) -> None:
-    from agent_gate import Gate
+    from agent_gate.legacy import Gate
 
     policy = tmp_path / "policy.yaml"
     policy.write_text(

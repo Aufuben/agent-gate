@@ -20,6 +20,6 @@ def audit_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def gate(policy_path: Path, audit_path: Path):
-    from agent_gate import Gate
+    from agent_gate.legacy import Gate
 
     return Gate(policy_path=policy_path, audit_path=audit_path)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_gate.gate import Gate
+from agent_gate.legacy.gate import Gate
 
 EXIT_OK = 0
 EXIT_UNEXPECTED = 1

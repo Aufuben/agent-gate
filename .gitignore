@@ -11,3 +11,6 @@ audit.jsonl
 audit.csv
 *.jsonl
 !policies/**
+keys.txt
+keys
+.env

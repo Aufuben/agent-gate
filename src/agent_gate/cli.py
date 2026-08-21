@@ -1,60 +1,89 @@
 from __future__ import annotations
 
 import argparse
-import json
+from datetime import date, datetime
 from pathlib import Path
 
-from agent_gate.demo import run_demo
-from agent_gate.gate import Gate
+from agent_gate.keys import PROVIDERS
+from agent_gate.report import default_date_range, format_table, query_usage
+
+
+def _parse_day(text: str) -> date:
+    return datetime.strptime(text, "%Y-%m-%d").date()
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-gate",
-        description="Tool-call control plane: check, dual-control, audit.",
+        description="查询 API Key 额度：OpenRouter / DeepSeek / OpenAI。",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    check = sub.add_parser("check", help="Evaluate policy for a role+tool")
+    usage = sub.add_parser("usage", help="Query per-key usage and quota")
+    usage.add_argument("--keys-file", required=True, help="One key per line (gitignored)")
+    usage.add_argument("--from", dest="from_date", default=None, help="YYYY-MM-DD, default last 30 days")
+    usage.add_argument("--to", dest="to_date", default=None, help="YYYY-MM-DD")
+    usage.add_argument(
+        "--providers",
+        default="openrouter,deepseek,openai",
+        help="Comma list: openrouter,deepseek,openai",
+    )
+
+    gui = sub.add_parser("gui", help="Local page: paste keys, 统计额度")
+    gui.add_argument("--host", default="127.0.0.1")
+    gui.add_argument("--port", type=int, default=8765)
+    gui.add_argument("--no-browser", action="store_true")
+
+    legacy = sub.add_parser("legacy", help=argparse.SUPPRESS)
+    legacy_sub = legacy.add_subparsers(dest="legacy_cmd", required=True)
+    check = legacy_sub.add_parser("check")
     check.add_argument("--policy", required=True)
     check.add_argument("--role", required=True)
     check.add_argument("--tool", required=True)
     check.add_argument("--actor", default="")
     check.add_argument("--session", default=None)
     check.add_argument("--audit", default="audit.jsonl")
-
-    record = sub.add_parser("record", help="Append a decision to the audit log")
-    record.add_argument("--session", required=True)
-    record.add_argument("--actor", required=True)
-    record.add_argument("--tool", required=True)
-    record.add_argument("--args", default="{}")
-    record.add_argument("--decision", required=True, choices=["allow", "deny"])
-    record.add_argument("--role", default="")
-    record.add_argument("--reason", default="")
-    record.add_argument("--audit", default="audit.jsonl")
-
-    approve = sub.add_parser("approve", help="Record an approver id for session+tool")
-    approve.add_argument("--session", required=True)
-    approve.add_argument("--tool", required=True)
-    approve.add_argument("--approver", required=True)
-    approve.add_argument("--audit", default="audit.jsonl")
-
-    export = sub.add_parser("export-audit", help="Write audit JSONL to CSV")
-    export.add_argument("--from", dest="from_ts", required=True)
-    export.add_argument("--out", required=True)
-    export.add_argument("--audit", default="audit.jsonl")
-
-    demo = sub.add_parser("demo", help="Dummy agent: read_file ok, prod_restart dual-control")
-    demo.add_argument("--policy", default="policies/example.yaml")
-    demo.add_argument("--audit", default="audit.jsonl")
-
-    gui = sub.add_parser("gui", help="Local page: who, what, can they do it")
-    gui.add_argument("--policy", default="policies/example.yaml")
-    gui.add_argument("--audit", default="audit.jsonl")
-    gui.add_argument("--host", default="127.0.0.1")
-    gui.add_argument("--port", type=int, default=8765)
-    gui.add_argument("--no-browser", action="store_true")
     return parser
+
+
+def _run_usage(args: argparse.Namespace) -> int:
+    path = Path(args.keys_file).expanduser()
+    if not path.is_file():
+        print(f"usage: keys file not found: {path}", flush=True)
+        return 2
+    text = path.read_text(encoding="utf-8")
+    start, end = default_date_range()
+    if args.from_date:
+        start = _parse_day(args.from_date)
+    if args.to_date:
+        end = _parse_day(args.to_date)
+    providers = tuple(item.strip() for item in str(args.providers).split(",") if item.strip()) or PROVIDERS
+    report = query_usage(
+        text=text,
+        from_date=start,
+        to_date=end,
+        providers=providers,
+    )
+    print(format_table(report), flush=True)
+    return 0
+
+
+def _run_legacy(args: argparse.Namespace) -> int:
+    import json
+
+    from agent_gate.legacy import Gate
+
+    if args.legacy_cmd == "check":
+        gate = Gate(policy_path=args.policy, audit_path=args.audit)
+        result = gate.check(
+            role=args.role,
+            tool=args.tool,
+            actor=args.actor or None,
+            session=args.session,
+        )
+        print(json.dumps(result.as_dict(), ensure_ascii=False), flush=True)
+        return 0 if result.allowed else 1
+    return 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,58 +96,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         return int(code)
 
-    if args.cmd == "check":
-        gate = Gate(policy_path=args.policy, audit_path=args.audit)
-        result = gate.check(
-            role=args.role,
-            tool=args.tool,
-            actor=args.actor or None,
-            session=args.session,
-        )
-        print(json.dumps(result.as_dict(), ensure_ascii=False), flush=True)
-        return 0 if result.allowed else 1
-
-    if args.cmd == "record":
-        gate = Gate(policy_path=None, audit_path=args.audit)
-        row = gate.record(
-            session=args.session,
-            actor=args.actor,
-            tool=args.tool,
-            args=args.args,
-            decision=args.decision,
-            role=args.role or None,
-            reason=args.reason or None,
-        )
-        print(json.dumps(row, ensure_ascii=False), flush=True)
-        return 0
-
-    if args.cmd == "approve":
-        gate = Gate(policy_path=None, audit_path=args.audit)
-        row = gate.approve(
-            session=args.session, tool=args.tool, approver=args.approver
-        )
-        print(json.dumps(row, ensure_ascii=False), flush=True)
-        return 0
-
-    if args.cmd == "export-audit":
-        gate = Gate(policy_path=None, audit_path=args.audit)
-        out = gate.export_audit(from_ts=args.from_ts, out=args.out)
-        print(str(Path(out)), flush=True)
-        return 0
-
-    if args.cmd == "demo":
-        return run_demo(policy_path=args.policy, audit_path=args.audit)
-
+    if args.cmd == "usage":
+        return _run_usage(args)
     if args.cmd == "gui":
         from agent_gate.gui import run_gui
 
-        return run_gui(
-            policy_path=args.policy,
-            audit_path=args.audit,
-            host=args.host,
-            port=args.port,
-            open_browser=not args.no_browser,
-        )
+        return run_gui(host=args.host, port=args.port, open_browser=not args.no_browser)
+    if args.cmd == "legacy":
+        return _run_legacy(args)
 
     parser.print_help()
     return 2
