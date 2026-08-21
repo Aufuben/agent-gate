@@ -109,27 +109,130 @@ def query_usage(
                 for parsed in parsed_rows
             ]
             rows = [future.result() for future in futures]
-    totals = {
-        "used": _sum_field(rows, "used_value", "used_unit"),
-        "remaining": _sum_field(rows, "remaining_value", "remaining_unit"),
-        "cost": _sum_field(rows, "cost_value", "cost_unit"),
-    }
-    return UsageReport(rows=rows, totals=totals, from_date=start, to_date=end)
+    totals, totals_note, subtotals = _build_totals(rows)
+    return UsageReport(
+        rows=rows,
+        totals=totals,
+        from_date=start,
+        to_date=end,
+        totals_note=totals_note,
+        subtotals=subtotals,
+    )
+
+
+def _provider_order(rows: list[UsageRow]) -> list[str]:
+    seen: list[str] = []
+    for row in rows:
+        if row.provider not in seen:
+            seen.append(row.provider)
+    return seen
+
+
+def _amount_kinds_and_units(rows: list[UsageRow]) -> tuple[set[str], set[str]]:
+    kinds: set[str] = set()
+    units: set[str] = set()
+    for row in rows:
+        if row.error:
+            continue
+        if row.provider == "deepseek":
+            if row.remaining_value is not None and row.remaining_unit:
+                kinds.add("balance")
+                units.add(row.remaining_unit)
+            elif row.remaining:
+                kinds.add("balance")
+                if "；" in row.remaining:
+                    kinds.add("balance-multi")
+            continue
+        if row.used_value is not None and row.used_unit:
+            kinds.add("usage")
+            units.add(row.used_unit)
+        if row.remaining_value is not None and row.remaining_unit:
+            kinds.add("usage")
+            units.add(row.remaining_unit)
+        elif row.remaining:
+            kinds.add("usage")
+    return kinds, units
+
+
+def _amount_is_mixed(rows: list[UsageRow]) -> bool:
+    kinds, units = _amount_kinds_and_units(rows)
+    if "balance-multi" in kinds:
+        return True
+    if "balance" in kinds and "usage" in kinds:
+        return True
+    return len(units) > 1
+
+
+def _amount_text_for_rows(rows: list[UsageRow]) -> str:
+    usable = [row for row in rows if not row.error]
+    if not usable:
+        return "—"
+    providers = {row.provider for row in usable if row.display_amount()}
+    if providers <= {"deepseek"}:
+        summed = _sum_field(usable, "remaining_value", "remaining_unit")
+        if summed != "—":
+            return summed
+        parts = [row.remaining for row in usable if row.remaining]
+        return "；".join(parts) if parts else "—"
+    used = _sum_field(usable, "used_value", "used_unit")
+    remaining = _sum_field(usable, "remaining_value", "remaining_unit")
+    parts: list[str] = []
+    if used != "—":
+        parts.append(f"已用 {used}")
+    unlimited = any(row.remaining == "不限" for row in usable)
+    if remaining != "—":
+        parts.append(f"剩余 {remaining}")
+    elif unlimited:
+        parts.append("剩余 不限")
+    return "；".join(parts) if parts else "—"
+
+
+def _build_totals(rows: list[UsageRow]) -> tuple[dict[str, str], str, list[dict[str, str]]]:
+    cost = _sum_field(rows, "cost_value", "cost_unit")
+    if not rows:
+        return {"amount": "—", "cost": "—"}, "", []
+    if _amount_is_mixed(rows):
+        subtotals = [
+            {
+                "provider": provider,
+                "amount": _amount_text_for_rows([row for row in rows if row.provider == provider]),
+                "cost": _sum_field(
+                    [row for row in rows if row.provider == provider],
+                    "cost_value",
+                    "cost_unit",
+                ),
+                "label": f"小计 {provider}",
+            }
+            for provider in _provider_order(rows)
+        ]
+        return {"amount": "—", "cost": cost}, "币种或口径不同，未合并合计", subtotals
+    return {"amount": _amount_text_for_rows(rows), "cost": cost}, "", []
 
 
 def format_table(report: UsageReport) -> str:
-    lines = ["密钥\t平台\t已用\t剩余\t费用\t说明"]
+    lines = ["平台\t密钥\t余额或用量\t费用\t说明"]
     for row in report.rows:
         note = row.error or row.note or ""
         lines.append(
             "\t".join(
                 [
-                    row.masked,
                     row.provider,
-                    row.used or "—",
-                    row.remaining or "—",
+                    row.masked,
+                    row.display_amount() or "—",
                     row.cost or "—",
                     note,
+                ]
+            )
+        )
+    for item in report.subtotals:
+        lines.append(
+            "\t".join(
+                [
+                    item.get("label") or f"小计 {item.get('provider') or ''}",
+                    "",
+                    item.get("amount") or "—",
+                    item.get("cost") or "—",
+                    "",
                 ]
             )
         )
@@ -138,10 +241,9 @@ def format_table(report: UsageReport) -> str:
             [
                 "合计",
                 "",
-                report.totals.get("used") or "—",
-                report.totals.get("remaining") or "—",
+                report.totals.get("amount") or "—",
                 report.totals.get("cost") or "—",
-                "",
+                report.totals_note or "",
             ]
         )
     )

@@ -14,6 +14,13 @@ def test_page_is_plain_usage_tool() -> None:
     html = page_html()
     assert "统计额度" in html
     assert "合计" in html
+    assert "<th>平台</th>" in html
+    assert "<th>密钥</th>" in html
+    assert "<th>余额或用量</th>" in html
+    assert "<th>费用</th>" in html
+    assert "<th>说明</th>" in html
+    assert "<th>已用</th>" not in html
+    assert "<th>剩余</th>" not in html
     assert "<textarea" in html
     assert "OpenRouter" in html
     assert "DeepSeek" in html

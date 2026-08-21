@@ -8,7 +8,7 @@ from agent_gate.models import UsageRow, format_amount
 
 HttpGet = Callable[..., Any]
 
-NOTE = "DeepSeek 只返回当前账户余额，没有按 Key 的月度用量接口"
+NOTE = "账户余额，非本月消耗"
 URL = "https://api.deepseek.com/user/balance"
 
 

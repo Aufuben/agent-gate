@@ -86,24 +86,15 @@
     <table id="out" hidden>
       <thead>
         <tr>
-          <th>密钥</th>
           <th>平台</th>
-          <th>已用</th>
-          <th>剩余</th>
+          <th>密钥</th>
+          <th>余额或用量</th>
           <th>费用</th>
           <th>说明</th>
         </tr>
       </thead>
       <tbody></tbody>
-      <tfoot>
-        <tr>
-          <td colspan="2">合计</td>
-          <td id="t-used"></td>
-          <td id="t-rem"></td>
-          <td id="t-cost"></td>
-          <td></td>
-        </tr>
-      </tfoot>
+      <tfoot></tfoot>
     </table>
   </main>
   <script>
@@ -154,19 +145,35 @@
         (data.rows || []).forEach((row) => {
           const tr = document.createElement("tr");
           const note = row.error || row.note || "";
-          const cells = [row.masked, row.provider, row.used || "—", row.remaining || "—", row.cost || "—", note];
+          const cells = [row.provider, row.masked, row.amount || "—", row.cost || "—", note];
           cells.forEach((text, i) => {
             const td = document.createElement("td");
             td.textContent = text || "—";
-            if (i === 5 && row.error) td.className = "err";
+            if (i === 4 && row.error) td.className = "err";
             tr.appendChild(td);
           });
           tbody.appendChild(tr);
         });
+        const tfoot = $("out").querySelector("tfoot");
+        tfoot.innerHTML = "";
+        const addFoot = (label, amount, cost, note) => {
+          const tr = document.createElement("tr");
+          const lab = document.createElement("td");
+          lab.colSpan = 2;
+          lab.textContent = label;
+          tr.appendChild(lab);
+          [amount || "—", cost || "—", note || ""].forEach((text) => {
+            const td = document.createElement("td");
+            td.textContent = text;
+            tr.appendChild(td);
+          });
+          tfoot.appendChild(tr);
+        };
         const totals = data.totals || {};
-        $("t-used").textContent = totals.used || "—";
-        $("t-rem").textContent = totals.remaining || "—";
-        $("t-cost").textContent = totals.cost || "—";
+        (data.subtotals || []).forEach((item) => {
+          addFoot(item.label || ("小计 " + (item.provider || "")), item.amount, item.cost, "");
+        });
+        addFoot(data.totals_label || "合计", totals.amount, totals.cost, data.totals_note || "");
         $("out").hidden = false;
         $("status").textContent = (data.rows || []).length ? "" : "没有可查询的 Key。";
       } catch (err) {
